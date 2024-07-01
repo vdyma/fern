@@ -5,17 +5,15 @@ import torchtune  # type: ignore
 
 import tqdm
 
+from fern.config import FernConfig
+
+
 batch_size = 32  # 64
-block_size = 512  # 256
 max_iters = 10000  # 5000
 eval_interval = 1000  # 500
 learning_rate = 3e-4
 device = "cuda"
 eval_iters = 100  # 200
-d_model = 384
-n_heads = 6
-n_layers = 6
-dropout = 0.2
 
 torch.manual_seed(0)  # type: ignore
 torch.set_float32_matmul_precision("high")
@@ -37,12 +35,21 @@ n = int(0.8 * len(data))
 train_data = data[:n]
 val_data = data[n:]
 
+fern_config = FernConfig(
+    d_model=384,
+    n_heads=6,
+    n_layers=6,
+    vocab_size=vocab_size,
+    block_size=512,  # 256
+    dropout=0.2,
+)
+
 
 def get_batch(split: str) -> tuple[torch.Tensor, torch.Tensor]:
     data = train_data if split == "train" else val_data
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([data[i : i + block_size] for i in ix])
-    y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
+    ix = torch.randint(len(data) - fern_config.block_size, (batch_size,))
+    x = torch.stack([data[i : i + fern_config.block_size] for i in ix])
+    y = torch.stack([data[i + 1 : i + fern_config.block_size + 1] for i in ix])
     return x, y
 
 
@@ -62,13 +69,23 @@ def estimate_loss(m: torch.nn.Module) -> dict[str, torch.Tensor]:
 
 
 class SelfAttentionHead(torch.nn.Module):
-    def __init__(self, head_size: int):
+    def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore
-        self.key = torch.nn.Linear(d_model, head_size, bias=False)
-        self.query = torch.nn.Linear(d_model, head_size, bias=False)
-        self.value = torch.nn.Linear(d_model, head_size, bias=False)
-        self.register_buffer("tril", torch.tril(torch.ones(block_size, block_size)))
-        self.dropout = torch.nn.Dropout(dropout)
+        self.config = config
+        self.key = torch.nn.Linear(
+            self.config.d_model, self.config.head_size, bias=False
+        )
+        self.query = torch.nn.Linear(
+            self.config.d_model, self.config.head_size, bias=False
+        )
+        self.value = torch.nn.Linear(
+            self.config.d_model, self.config.head_size, bias=False
+        )
+        self.register_buffer(
+            "tril",
+            torch.tril(torch.ones(self.config.block_size, self.config.block_size)),
+        )
+        self.dropout = torch.nn.Dropout(self.config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         _B, T, _C = x.size()
@@ -89,13 +106,16 @@ class SelfAttentionHead(torch.nn.Module):
 
 
 class MultiHeadAttention(torch.nn.Module):
-    def __init__(self, heads: int, head_size: int):
+    def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore
+        self.config = config
         self.heads = torch.nn.ModuleList(
-            [SelfAttentionHead(head_size) for _ in range(heads)]
+            [SelfAttentionHead(self.config) for _ in range(self.config.n_heads)]
         )
-        self.proj = torch.nn.Linear(d_model, d_model, bias=False)
-        self.dropout = torch.nn.Dropout(dropout)
+        self.proj = torch.nn.Linear(
+            self.config.d_model, self.config.d_model, bias=False
+        )
+        self.dropout = torch.nn.Dropout(self.config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = torch.concat([head(x) for head in self.heads], dim=-1)
@@ -103,18 +123,22 @@ class MultiHeadAttention(torch.nn.Module):
 
 
 class FusedMultiHeadAttention(torch.nn.Module):
-    def __init__(self, heads: int, head_size: int):
+    def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore
-        self.attn = torch.nn.Linear(d_model, d_model * 3, bias=False)
-        self.nheads = heads
-        self.proj = torch.nn.Linear(d_model, d_model, bias=False)
-        self.dropout = torch.nn.Dropout(dropout)
+        self.config = config
+        self.attn = torch.nn.Linear(
+            self.config.d_model, self.config.d_model * 3, bias=False
+        )
+        self.proj = torch.nn.Linear(
+            self.config.d_model, self.config.d_model, bias=False
+        )
+        self.dropout = torch.nn.Dropout(self.config.dropout)
 
         self.q_rope = torchtune.modules.RotaryPositionalEmbeddings(
-            d_model // self.nheads, block_size
+            self.config.d_model // self.config.n_heads, self.config.block_size
         )
         self.k_rope = torchtune.modules.RotaryPositionalEmbeddings(
-            d_model // self.nheads, block_size
+            self.config.d_model // self.config.n_heads, self.config.block_size
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -126,7 +150,7 @@ class FusedMultiHeadAttention(torch.nn.Module):
         q, k, v = tuple(
             map(
                 reshape_view,  # .transpose(1, 2),
-                self.attn(x).split(d_model, dim=2),
+                self.attn(x).split(self.config.d_model, dim=2),
             )
         )  # (B, T, n_head, head_dim)
 
@@ -139,7 +163,7 @@ class FusedMultiHeadAttention(torch.nn.Module):
             k,
             v.transpose(1, 2),
             attn_mask=None,
-            dropout_p=dropout if self.training else 0,
+            dropout_p=self.config.dropout if self.training else 0,
             is_causal=True,
         )
 
@@ -159,13 +183,20 @@ class SwiGLU(torch.nn.Module):
 
 
 class FeedForward(torch.nn.Module):
-    def __init__(self, n_embd: int):
+    def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore
-        self.w1 = torch.nn.Linear(n_embd, n_embd * 4, bias=False)
+        self.config = config
+        self.w1 = torch.nn.Linear(
+            self.config.d_model, self.config.d_model * 4, bias=False
+        )
         self.swish = torch.nn.SiLU()
-        self.w2 = torch.nn.Linear(n_embd, n_embd * 4, bias=False)
-        self.w3 = torch.nn.Linear(n_embd * 4, n_embd, bias=False)
-        self.drop = torch.nn.Dropout(dropout)
+        self.w2 = torch.nn.Linear(
+            self.config.d_model, self.config.d_model * 4, bias=False
+        )
+        self.w3 = torch.nn.Linear(
+            self.config.d_model * 4, self.config.d_model, bias=False
+        )
+        self.drop = torch.nn.Dropout(self.config.dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out = self.drop(self.w3(self.swish(self.w1(x)) * self.w2(x)))
@@ -173,13 +204,14 @@ class FeedForward(torch.nn.Module):
 
 
 class TransformerBlock(torch.nn.Module):
-    def __init__(self, n_embd: int, n_head: int):
+    def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore
-        head_size = n_embd // n_head
-        self.sa = FusedMultiHeadAttention(n_head, head_size)
-        self.ff = FeedForward(n_embd)
-        self.rmsn1 = torchtune.modules.RMSNorm(n_embd)
-        self.rmsn2 = torchtune.modules.RMSNorm(n_embd)
+        self.config = config
+        # head_size = self.config.d_model // self.config.n_heads
+        self.sa = FusedMultiHeadAttention(self.config)
+        self.ff = FeedForward(self.config)
+        self.rmsn1 = torchtune.modules.RMSNorm(self.config.d_model)
+        self.rmsn2 = torchtune.modules.RMSNorm(self.config.d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.sa(self.rmsn1(x))
@@ -188,14 +220,21 @@ class TransformerBlock(torch.nn.Module):
 
 
 class Transformer(torch.nn.Module):
-    def __init__(self):
+    config = FernConfig
+
+    def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore
-        self.token_embedding_table = torch.nn.Embedding(vocab_size, d_model)
-        self.blocks = torch.nn.Sequential(
-            *[TransformerBlock(d_model, n_head=n_heads) for _ in range(n_layers)]
+        self.config = config
+        self.token_embedding_table = torch.nn.Embedding(
+            self.config.vocab_size, self.config.d_model
         )
-        self.rmsn = torchtune.modules.RMSNorm(d_model)
-        self.lm_head = torch.nn.Linear(d_model, vocab_size, bias=False)
+        self.blocks = torch.nn.Sequential(
+            *[TransformerBlock(self.config) for _ in range(self.config.n_layers)]
+        )
+        self.rmsn = torchtune.modules.RMSNorm(self.config.d_model)
+        self.lm_head = torch.nn.Linear(
+            self.config.d_model, self.config.vocab_size, bias=False
+        )
 
     def forward(
         self,
@@ -221,7 +260,7 @@ class Transformer(torch.nn.Module):
     def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
         for _ in range(max_new_tokens):
             # crop idx
-            idx_cond = idx[:, -block_size:]
+            idx_cond = idx[:, -self.config.block_size :]
             logits, _loss = self(idx_cond)
             logits = logits[:, -1, :]
             probs = torch.nn.functional.softmax(logits, dim=-1)
@@ -231,7 +270,7 @@ class Transformer(torch.nn.Module):
 
 
 if __name__ == "__main__":
-    model = Transformer().to(device)
+    model = Transformer(fern_config).to(device)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
 
