@@ -145,7 +145,7 @@ class FusedMultiHeadAttention(torch.nn.Module):
         B, T, C = x.size()
         # (B, T, C) -> (B, T, n_head, head_dim)
         reshape_view: t.Callable[[torch.Tensor], torch.Tensor] = lambda w: w.view(
-            B, T, self.nheads, C // self.nheads
+            B, T, self.config.n_heads, C // self.config.n_heads
         )
         q, k, v = tuple(
             map(
