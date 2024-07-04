@@ -26,8 +26,14 @@ vocab_size = len(chars)
 itos = dict(enumerate(chars))
 stoi = dict((s, i) for i, s in itos.items())
 
-encode: t.Callable[[str], list[int]] = lambda seq: [stoi[ch] for ch in seq]
-decode: t.Callable[[list[int]], str] = lambda seq: "".join(itos[ix] for ix in seq)
+
+def encode(seq: str) -> list[int]:
+    return [stoi[ch] for ch in seq]
+
+
+def decode(seq: list[int]) -> str:
+    return "".join(itos[ix] for ix in seq)
+
 
 data = torch.tensor(encode(text), dtype=torch.long, device=device)
 n = int(0.8 * len(data))
@@ -141,15 +147,15 @@ class FusedMultiHeadAttention(torch.nn.Module):
             self.config.d_model // self.config.n_heads, self.config.block_size
         )
 
+    def __reshape_view(self, w: torch.Tensor, B: int, T: int, C: int) -> torch.Tensor:
+        # (B, T, C) -> (B, T, n_head, head_dim)
+        return w.view(B, T, self.config.n_heads, C // self.config.n_heads)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         B, T, C = x.size()
-        # (B, T, C) -> (B, T, n_head, head_dim)
-        reshape_view: t.Callable[[torch.Tensor], torch.Tensor] = lambda w: w.view(
-            B, T, self.config.n_heads, C // self.config.n_heads
-        )
         q, k, v = tuple(
             map(
-                reshape_view,  # .transpose(1, 2),
+                lambda w: self.__reshape_view(w, B, T, C),  # .transpose(1, 2),
                 self.attn(x).split(self.config.d_model, dim=2),
             )
         )  # (B, T, n_head, head_dim)
