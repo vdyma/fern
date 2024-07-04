@@ -256,17 +256,33 @@ class Transformer(torch.nn.Module):
 
         return logits, loss
 
-    # Yield for real-time generation
-    def generate(self, idx: torch.Tensor, max_new_tokens: int) -> torch.Tensor:
+    def generate(
+        self, indexes: torch.Tensor, max_new_tokens: int
+    ) -> t.Generator[torch.Tensor, None, None]:
         for _ in range(max_new_tokens):
             # crop idx
-            idx_cond = idx[:, -self.config.block_size :]
-            logits, _loss = self(idx_cond)
+            idx_cond = indexes[:, -self.config.block_size :]
+            logits, _ = self.forward(idx_cond)
             logits = logits[:, -1, :]
             probs = torch.nn.functional.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1, replacement=True)
-            idx = torch.cat((idx, idx_next), dim=1)
-        return idx
+            indexes = torch.cat((indexes, idx_next), dim=1)
+            yield idx_next
+
+    def get_generation(
+        self, indexes: torch.Tensor, max_new_tokens: int
+    ) -> torch.Tensor:
+        result = torch.empty(
+            (indexes.size(0), indexes.size(1) + max_new_tokens),
+            dtype=indexes.dtype,
+            device=indexes.device,
+        )
+        result[0, 0:-max_new_tokens] = indexes
+        current_token = 0
+        for tok in self.generate(indexes, max_new_tokens):
+            result[0, current_token - max_new_tokens] = tok
+            current_token += 1
+        return result
 
 
 if __name__ == "__main__":
@@ -307,5 +323,5 @@ if __name__ == "__main__":
 
     context = torch.zeros((1, 1), dtype=torch.long, device=device)
     model.eval()
-    generated: list[int] = model.generate(context, 512)[0].tolist()  # type: ignore
+    generated: list[int] = model.get_generation(context, 512)[0].tolist()  # type: ignore
     print(decode(generated))
