@@ -18,6 +18,7 @@ class BytePairEncoding:
     """Simple implementation of the BPE tokenizer that actually works on byte pairs."""
 
     vocab_size: int
+    special_tokens: list[str]
     use_regex: bool
     _pair_to_index: Optional[PairToIndex] = None
     _index_to_pair: Optional[IndexToPair] = None
@@ -34,8 +35,8 @@ class BytePairEncoding:
 
     @pair_to_index.setter
     def pair_to_index(self, pti: PairToIndex):
-        assert self.vocab_size - raw_bytes == len(
-            pti
+        assert (
+            self.vocab_size - raw_bytes == len(pti)
         ), f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(pti)}"
         self._pair_to_index = pti
         self._index_to_pair = utils.invert_dict(pti)
@@ -50,16 +51,17 @@ class BytePairEncoding:
 
     @index_to_pair.setter
     def index_to_pair(self, itp: IndexToPair):
-        assert self.vocab_size - raw_bytes == len(
-            itp
+        assert (
+            self.vocab_size - raw_bytes == len(itp)
         ), f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(itp)}"
         self._index_to_pair = itp
         self._pair_to_index = utils.invert_dict(itp)
 
-    def __init__(self, vocab_size: int, use_regex: bool = True):
-        assert vocab_size > raw_bytes, "Vocab size must be at least 257"
+    def __init__(self, vocab_size: int, special_tokens: list[str] = [], use_regex: bool = True):
+        assert vocab_size > raw_bytes + len(special_tokens), f"Vocab size must be at least {raw_bytes + len(special_tokens)}"
         self.vocab_size = vocab_size
         self.use_regex = use_regex
+        self.special_tokens = special_tokens
 
     @staticmethod
     def from_pretrained(
@@ -74,6 +76,18 @@ class BytePairEncoding:
         self, text: str, save_path: Optional[str] = None, show_progress: bool = False
     ) -> PairToIndex:
         self._pair_to_index = dict()
+        
+        # Process special tokens
+        i = 0
+        special_tokens_bytes: list[EncodedString] = list(map(lambda st: list(st.encode("utf-8")), self.special_tokens))
+        while all(map(lambda x: len(x) != 1, special_tokens_bytes)):
+            stats = self._get_stats(special_tokens_bytes)
+            frequent_pair = max(stats, key=lambda x: stats[x])
+            special_tokens_bytes = self._merge(special_tokens_bytes, frequent_pair, i)
+            self.pair_to_index[frequent_pair] = i
+            i += 1
+        
+        # Process texts
         texts = [text]
         if self.use_regex:
             pattern = re.compile(self._GPT4_SPLIT_PATTERN)
@@ -81,7 +95,7 @@ class BytePairEncoding:
         parts_bytes: list[EncodedString] = list(
             map(lambda part: list(part.encode("utf-8")), texts)
         )
-        rng = range(raw_bytes, self.vocab_size, 1)
+        rng = range(raw_bytes + len(self._pair_to_index), self.vocab_size, 1)
         if show_progress:
             rng = tqdm.tqdm(rng)
         for i in rng:
@@ -89,6 +103,7 @@ class BytePairEncoding:
             frequent_pair = max(stats, key=lambda x: stats[x])
             parts_bytes = self._merge(parts_bytes, frequent_pair, i)
             self.pair_to_index[frequent_pair] = i
+        
         self._index_to_pair = dict((v, k) for k, v in self.pair_to_index.items())
         if save_path is not None:
             self.save(save_path)
