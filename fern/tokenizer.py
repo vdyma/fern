@@ -61,7 +61,7 @@ class BytePairEncoding:
         assert vocab_size > raw_bytes + len(special_tokens), f"Vocab size must be at least {raw_bytes + len(special_tokens)}"
         self.vocab_size = vocab_size
         self.use_regex = use_regex
-        self.specical_tokens = special_tokens
+        self.special_tokens = special_tokens
 
     @staticmethod
     def from_pretrained(
@@ -85,6 +85,7 @@ class BytePairEncoding:
             frequent_pair = max(stats, key=lambda x: stats[x])
             special_tokens_bytes = self._merge(special_tokens_bytes, frequent_pair, i)
             self.pair_to_index[frequent_pair] = i
+            i += 1
         
         # Process texts
         texts = [text]
