@@ -5,6 +5,7 @@ import torchtune  # type: ignore
 
 from fern.config import FernConfig
 
+
 class SelfAttentionHead(torch.nn.Module):
     def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore

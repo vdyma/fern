@@ -9,6 +9,8 @@ from fern import utils
 TokenPair = tuple[int, int]
 PairToIndex = dict[TokenPair, int]
 IndexToPair = dict[int, TokenPair]
+SpecialTokenToIndex = dict[str, int]
+IndexToSpecialToken = dict[int, str]
 BytePairStats = dict[TokenPair, int]
 EncodedString = list[int]
 raw_bytes = 256
@@ -22,6 +24,8 @@ class BytePairEncoding:
     use_regex: bool
     _pair_to_index: Optional[PairToIndex] = None
     _index_to_pair: Optional[IndexToPair] = None
+    _special_token_to_index: SpecialTokenToIndex = dict()
+    _index_to_special_token: IndexToSpecialToken = dict()
 
     _GPT4_SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
@@ -57,11 +61,19 @@ class BytePairEncoding:
         self._index_to_pair = itp
         self._pair_to_index = utils.invert_dict(itp)
 
-    def __init__(self, vocab_size: int, special_tokens: list[str] = [], use_regex: bool = True):
-        assert vocab_size > raw_bytes + len(special_tokens), f"Vocab size must be at least {raw_bytes + len(special_tokens)}"
+    def __init__(
+        self, vocab_size: int, special_tokens: list[str] = [], use_regex: bool = True
+    ):
+        assert vocab_size > raw_bytes + len(
+            special_tokens
+        ), f"Vocab size must be at least {raw_bytes + len(special_tokens)}"
         self.vocab_size = vocab_size
         self.use_regex = use_regex
-        self.special_tokens = special_tokens
+
+        for i in range(len(special_tokens)):
+            ix = self.vocab_size - len(special_tokens) + i
+            self._special_token_to_index[special_tokens[i]] = ix
+            self._index_to_special_token[ix] = special_tokens[i]
 
     @staticmethod
     def from_pretrained(
@@ -71,31 +83,37 @@ class BytePairEncoding:
         bpe.pair_to_index = pair_to_index
         return bpe
 
+    def _separate_special_tokens(self, text: str) -> list[str]:
+        special_pattern = f"""({"|".join(re.escape(tok) for tok in self._special_token_to_index.keys())})"""
+        return re.split(special_pattern, text)
+
     # TODO: Optimize. Keep track of positions of pairs. When merging - simultaniously count new pairs, while subtracting from the previous ones.
     def train(
         self, text: str, save_path: Optional[str] = None, show_progress: bool = False
     ) -> PairToIndex:
         self._pair_to_index = dict()
-        
-        # Process special tokens
-        i = 0
-        special_tokens_bytes: list[EncodedString] = list(map(lambda st: list(st.encode("utf-8")), self.special_tokens))
-        while all(map(lambda x: len(x) != 1, special_tokens_bytes)):
-            stats = self._get_stats(special_tokens_bytes)
-            frequent_pair = max(stats, key=lambda x: stats[x])
-            special_tokens_bytes = self._merge(special_tokens_bytes, frequent_pair, i)
-            self.pair_to_index[frequent_pair] = i
-            i += 1
-        
-        # Process texts
-        texts = [text]
+
+        # Separate special tokens
+        candidate_texts: list[str] = [text]
+        if len(self._special_token_to_index) != 0:
+            candidate_texts = self._separate_special_tokens(text)
+
+        # Separate parts with no special tokens
+        texts: list[str] = []
         if self.use_regex:
             pattern = re.compile(self._GPT4_SPLIT_PATTERN)
-            texts = pattern.findall(text)
+            for t in candidate_texts:
+                if t in self._special_token_to_index.keys():
+                    continue  # no need to train on special tokens
+                texts.extend(pattern.findall(t))
+
+        if len(texts) == 0:
+            texts = [text]
+
         parts_bytes: list[EncodedString] = list(
             map(lambda part: list(part.encode("utf-8")), texts)
         )
-        rng = range(raw_bytes + len(self._pair_to_index), self.vocab_size, 1)
+        rng = range(raw_bytes, self.vocab_size - len(self._special_token_to_index), 1)
         if show_progress:
             rng = tqdm.tqdm(rng)
         for i in rng:
@@ -103,7 +121,7 @@ class BytePairEncoding:
             frequent_pair = max(stats, key=lambda x: stats[x])
             parts_bytes = self._merge(parts_bytes, frequent_pair, i)
             self.pair_to_index[frequent_pair] = i
-        
+
         self._index_to_pair = dict((v, k) for k, v in self.pair_to_index.items())
         if save_path is not None:
             self.save(save_path)
@@ -139,6 +157,8 @@ class BytePairEncoding:
         for i in enocded_text:
             if i < raw_bytes:
                 decoded_bytes += bytes([i])
+            elif i in self._index_to_special_token.keys():
+                decoded_bytes += self._index_to_special_token[i].encode("utf-8")
             else:
                 decoded_bytes += self._decode(list(self.index_to_pair[i]))
         return decoded_bytes
@@ -147,14 +167,26 @@ class BytePairEncoding:
         return self._decode(encoded_text).decode("utf-8", errors="replace")
 
     def encode(self, text: str) -> EncodedString:
-        text_bytes: list[EncodedString] = [list(text.encode("utf-8"))]
-        while len(text_bytes[0]) >= 2:
-            stats = self._get_stats(text_bytes)
-            pair = min(stats, key=lambda p: self.pair_to_index.get(p, float("inf")))
-            if pair not in self.pair_to_index:
-                break
-            text_bytes = self._merge(text_bytes, pair, self.pair_to_index[pair])
-        return text_bytes[0]
+        text_parts = [text]
+        if len(self._special_token_to_index) != 0:
+            text_parts = self._separate_special_tokens(text)
+
+        encoded_text: EncodedString = list()
+        for part in text_parts:
+            # if the text part is special token, process it
+            if part in self._special_token_to_index.keys():
+                encoded_text.append(self._special_token_to_index[part])
+                continue
+
+            text_bytes: list[EncodedString] = [list(part.encode("utf-8"))]
+            while len(text_bytes[0]) >= 2:
+                stats = self._get_stats(text_bytes)
+                pair = min(stats, key=lambda p: self.pair_to_index.get(p, float("inf")))
+                if pair not in self.pair_to_index:
+                    break
+                text_bytes = self._merge(text_bytes, pair, self.pair_to_index[pair])
+            encoded_text.extend(text_bytes[0])
+        return encoded_text
 
     def save(self, path: str):
         p = pathlib.Path(path)
