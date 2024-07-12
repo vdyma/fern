@@ -1,6 +1,6 @@
 from __future__ import annotations
 import pathlib
-from typing import Optional
+from typing import Any, Optional
 import json
 import regex as re
 import tqdm.auto as tqdm
@@ -21,13 +21,12 @@ class BytePairEncoding:
 
     vocab_size: int
     special_tokens: list[str]
-    use_regex: bool
     _pair_to_index: Optional[PairToIndex] = None
     _index_to_pair: Optional[IndexToPair] = None
     _special_token_to_index: SpecialTokenToIndex = dict()
     _index_to_special_token: IndexToSpecialToken = dict()
 
-    _GPT4_SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
+    _split_pattern: str = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]++[\r\n]*|\s*[\r\n]|\s+(?!\S)|\s+"""
 
     @property
     def pair_to_index(self) -> PairToIndex:
@@ -40,7 +39,7 @@ class BytePairEncoding:
     @pair_to_index.setter
     def pair_to_index(self, pti: PairToIndex):
         assert (
-            self.vocab_size - raw_bytes == len(pti)
+            self.vocab_size - raw_bytes - len(self.special_token_to_index) == len(pti)
         ), f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(pti)}"
         self._pair_to_index = pti
         self._index_to_pair = utils.invert_dict(pti)
@@ -56,19 +55,49 @@ class BytePairEncoding:
     @index_to_pair.setter
     def index_to_pair(self, itp: IndexToPair):
         assert (
-            self.vocab_size - raw_bytes == len(itp)
+            self.vocab_size - raw_bytes - len(self.special_token_to_index) == len(itp)
         ), f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(itp)}"
         self._index_to_pair = itp
         self._pair_to_index = utils.invert_dict(itp)
 
+    @property
+    def special_token_to_index(self) -> SpecialTokenToIndex:
+        return self._special_token_to_index
+
+    @special_token_to_index.setter
+    def special_token_to_index(self, sti: SpecialTokenToIndex):
+        self._special_token_to_index = sti
+        self._index_to_special_token = utils.invert_dict(sti)
+
+    @property
+    def index_to_special_token(self) -> IndexToSpecialToken:
+        return self._index_to_special_token
+
+    @index_to_special_token.setter
+    def index_to_special_token(self, its: IndexToSpecialToken):
+        self._index_to_special_token = its
+        self._special_token_to_index = utils.invert_dict(its)
+
+    @property
+    def split_pattern(self) -> str:
+        return self._split_pattern
+
+    @split_pattern.setter
+    def split_pattern(self, sp: str):
+        self._split_pattern = sp
+
     def __init__(
-        self, vocab_size: int, special_tokens: list[str] = [], use_regex: bool = True
+        self,
+        vocab_size: int,
+        special_tokens: list[str] = [],
+        split_pattern: Optional[str] = None,
     ):
         assert vocab_size > raw_bytes + len(
             special_tokens
         ), f"Vocab size must be at least {raw_bytes + len(special_tokens)}"
         self.vocab_size = vocab_size
-        self.use_regex = use_regex
+        if split_pattern is not None:
+            self._split_pattern = split_pattern
 
         for i in range(len(special_tokens)):
             ix = self.vocab_size - len(special_tokens) + i
@@ -77,9 +106,15 @@ class BytePairEncoding:
 
     @staticmethod
     def from_pretrained(
-        pair_to_index: PairToIndex, use_regex: bool = True
+        pair_to_index: PairToIndex,
+        special_token_to_index: SpecialTokenToIndex = dict(),
+        split_pattern: Optional[str] = None,
     ) -> BytePairEncoding:
-        bpe = BytePairEncoding(raw_bytes + len(pair_to_index), use_regex=use_regex)
+        bpe = BytePairEncoding(
+            raw_bytes + len(pair_to_index) + len(special_token_to_index),
+            split_pattern=split_pattern,
+        )
+        bpe.special_token_to_index = special_token_to_index
         bpe.pair_to_index = pair_to_index
         return bpe
 
@@ -100,15 +135,11 @@ class BytePairEncoding:
 
         # Separate parts with no special tokens
         texts: list[str] = []
-        if self.use_regex:
-            pattern = re.compile(self._GPT4_SPLIT_PATTERN)
-            for t in candidate_texts:
-                if t in self._special_token_to_index.keys():
-                    continue  # no need to train on special tokens
-                texts.extend(pattern.findall(t))
-
-        if len(texts) == 0:
-            texts = [text]
+        pattern = re.compile(self._split_pattern)
+        for t in candidate_texts:
+            if t in self._special_token_to_index.keys():
+                continue  # no need to train on special tokens
+            texts.extend(pattern.findall(t))
 
         parts_bytes: list[EncodedString] = list(
             map(lambda part: list(part.encode("utf-8")), texts)
@@ -188,16 +219,30 @@ class BytePairEncoding:
             encoded_text.extend(text_bytes[0])
         return encoded_text
 
-    def save(self, path: str):
+    def save(self, path: str) -> None:
         p = pathlib.Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(list(self.pair_to_index.items())))
+        tok_obj: dict[str, Any] = dict()
+        tok_obj["pair_to_index"] = list(self.pair_to_index.items())
+        tok_obj["special_token_to_index"] = list(self._special_token_to_index.items())
+        tok_obj["split_pattern"] = self._split_pattern
+        p.write_text(json.dumps(tok_obj))
 
     @staticmethod
     def load(path: str) -> BytePairEncoding:
         p = pathlib.Path(path)
-        loaded_json: list[tuple[TokenPair, int]] = json.loads(p.read_bytes())
-        flat_pair_to_index: list[tuple[TokenPair, int]] = list(
-            map(lambda x: ((x[0][0], x[0][1]), x[1]), loaded_json)
+        loaded_json: dict[str, Any] = json.loads(p.read_bytes())
+        pair_to_index: PairToIndex = dict(
+            list(
+                map(lambda x: ((x[0][0], x[0][1]), x[1]), loaded_json["pair_to_index"])
+            )
         )
-        return BytePairEncoding.from_pretrained(dict(flat_pair_to_index))
+        special_token_to_index: SpecialTokenToIndex = dict(
+            list(map(lambda x: (x[0], x[1]), loaded_json["special_token_to_index"]))
+        )
+        split_pattern = loaded_json["split_pattern"]
+        return BytePairEncoding.from_pretrained(
+            pair_to_index=pair_to_index,
+            special_token_to_index=special_token_to_index,
+            split_pattern=split_pattern,
+        )
