@@ -195,9 +195,23 @@ class Transformer(torch.nn.Module):
         return logits, loss
 
     def generate(
-        self, indexes: torch.Tensor, max_new_tokens: int
+        self,
+        indexes: torch.Tensor,
+        max_new_tokens: t.Optional[int] = None,
+        stop_token: t.Optional[int] = None,
     ) -> t.Generator[torch.Tensor, None, None]:
-        for _ in range(max_new_tokens):
+        assert (
+            max_new_tokens is not None or stop_token is not None
+        ), "Either `max_new_tokens` or `stop_token` should be set"
+        i = 0
+        idx_next = torch.tensor([[-1]])
+        while_conditions: list[t.Callable[[None], bool]] = []
+        if max_new_tokens is not None:
+            while_conditions.append(lambda _: i < max_new_tokens)
+        if stop_token is not None:
+            while_conditions.append(lambda _: stop_token not in idx_next)
+        while all(map(lambda x: x(None), while_conditions)):
+            i += 1
             # crop idx
             idx_cond = indexes[:, -self.config.block_size :]
             logits, _ = self.forward(idx_cond)
@@ -208,16 +222,12 @@ class Transformer(torch.nn.Module):
             yield idx_next
 
     def get_generation(
-        self, indexes: torch.Tensor, max_new_tokens: int
+        self,
+        indexes: torch.Tensor,
+        max_new_tokens: t.Optional[int] = None,
+        stop_token: t.Optional[int] = None,
     ) -> torch.Tensor:
-        result = torch.empty(
-            (indexes.size(0), indexes.size(1) + max_new_tokens),
-            dtype=indexes.dtype,
-            device=indexes.device,
-        )
-        result[0, 0:-max_new_tokens] = indexes
-        current_token = 0
-        for tok in self.generate(indexes, max_new_tokens):
-            result[0, current_token - max_new_tokens] = tok
-            current_token += 1
-        return result
+        result: list[int] = indexes[0].tolist()  # type: ignore
+        for tok in self.generate(indexes, max_new_tokens, stop_token):
+            result.append(int(tok.item()))
+        return torch.tensor(result)
