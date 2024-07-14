@@ -15,3 +15,39 @@ The following system components are implemented:
     - [RoPE](https://arxiv.org/abs/2104.09864) positional embeddings
     - [SwiGLU](https://arxiv.org/abs/2002.05202) activation function
 - [Byte-Pair Encoding](https://arxiv.org/abs/1508.07909) Tokenizer
+
+## Install and run
+
+1. Install [miniforge3](https://github.com/conda-forge/miniforge?tab=readme-ov-file#install).
+
+2. Clone this repository. To clone the repository using [git](https://git-scm.com/), run:
+
+```bash
+git clone https://github.com/vdyma/fern
+```
+
+3. Open repository root directory as a working directory in your shell and create a new conda environment:
+
+```bash
+conda install --file environment.yaml
+```
+
+4. Activate conda environment:
+
+```bash
+conda activate fern
+```
+
+You are now ready to use the model. 
+
+(Optional) In order to run Jupyter Notebooks, you need to additionally install [Jupyter Lab](https://jupyter.org/install) and `ipywidgets`:
+
+```bash
+conda install jupyterlab ipywidgets
+```
+
+You can then run jupyter as follows:
+
+```bash
+jupyter lab
+```
