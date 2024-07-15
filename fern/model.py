@@ -145,7 +145,6 @@ class TransformerBlock(torch.nn.Module):
     def __init__(self, config: FernConfig):
         super().__init__()  # type: ignore
         self.config = config
-        # head_size = self.config.d_model // self.config.n_heads
         self.sa = FusedMultiHeadAttention(self.config)
         self.ff = FeedForward(self.config)
         self.rmsn1 = torchtune.modules.RMSNorm(self.config.d_model)
@@ -166,6 +165,7 @@ class Transformer(torch.nn.Module):
         self.token_embedding_table = torch.nn.Embedding(
             self.config.vocab_size, self.config.d_model
         )
+        self.token_embedding_table.weight.data *= 0.1
         self.blocks = torch.nn.Sequential(
             *[TransformerBlock(self.config) for _ in range(self.config.n_layers)]
         )
@@ -183,7 +183,8 @@ class Transformer(torch.nn.Module):
         x = tok_emb
         x: torch.Tensor = self.blocks(x)
         x: torch.Tensor = self.rmsn(x)
-        logits: torch.Tensor = self.lm_head(x)  # (B, T, vocab_size)
+        # logits: torch.Tensor = self.lm_head(x)  # (B, T, vocab_size)
+        logits = x @ self.token_embedding_table.weight.transpose(-2, -1)
 
         loss = None
         if targets is not None:
