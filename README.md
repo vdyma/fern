@@ -6,7 +6,9 @@ _In the realm where technology and nature intertwine, Fern emerges as a beacon o
 
 Fern is an ongoing effort to create a model similar to [Chameleon](https://arxiv.org/abs/2405.09818), but which would cover all modalities. Currently it resembles [Llama 2](https://arxiv.org/abs/2307.09288) in terms of architecture.
 
-## Components
+## Overview
+
+### Architecture
 
 The following system components are implemented:
 
@@ -14,7 +16,16 @@ The following system components are implemented:
     - [RMSNorm](https://arxiv.org/abs/1910.07467) normalization
     - [RoPE](https://arxiv.org/abs/2104.09864) positional embeddings
     - [SwiGLU](https://arxiv.org/abs/2002.05202) activation function
-- [Byte-Pair Encoding](https://arxiv.org/abs/1508.07909) Tokenizer
+    - [Embedding sharing](https://arxiv.org/abs/2205.01068)
+- [Byte-Pair Encoding](https://arxiv.org/abs/1508.07909) tokenizer
+
+### Data and tokenization
+
+Train data is all the books from [The Elder Scrolls](https://elderscrolls.com) video game series taken from [The Imperial Library](https://www.imperial-library.info/). BPE tokenizer is trained on the whole dataset to create 2048 new tokens, including the special `<|endoftext|>` token. This results in vocabulary containing 2304 tokens in total (256 byte tokens, 2047 pair tokens and 1 special token). Vocabulary of this size captures lore terms such as ` Valenwood` and ` Bosmer` as well as literature categories such as ` Fiction` and ` Narrative` in a single token which is learned nearly at the end of the tokenizer training. Further investigation on the optimal vocabulary size needed.
+
+### Results
+
+The model `dim` is 128, it has 32 layers with 8 heads each. Model is trained with the context size 512 tokens and batch size containing 32 examples. The model achieves 2.74 train loss and 3.52 validation loss after 10000 training steps. The training process took nearly 50 minutes on a single laptop Nvidia RTX 4060 GPU. 
 
 ## Install and run
 
