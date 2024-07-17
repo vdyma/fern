@@ -25,7 +25,11 @@ Train data is all the books from [The Elder Scrolls](https://elderscrolls.com) v
 
 ### Results
 
-The model `dim` is 128, it has 32 layers with 8 heads each. Model is trained with the context size 512 tokens and batch size containing 32 examples. The model achieves 2.74 train loss and 3.52 validation loss after 10000 training steps. The training process took nearly 50 minutes on a single laptop Nvidia RTX 4060 GPU. 
+The model `dim` is 128, it has 32 layers with 8 heads each. Model is trained with the context size 512 tokens and batch size containing 32 examples. The model achieves 2.74 train loss and 3.52 validation loss after 10000 training steps. The training process took nearly 50 minutes on a single laptop Nvidia RTX 4060 GPU.
+
+| Configuration | Train loss | Val loss
+|-|-|-
+| Transformer (d=128, L=32, h=8) + RMSNorm + RoPE + SwiGLU + ES; Tok2304, batch 32, context 512 | 2.74 | 3.52 
 
 ## Install and run
 
