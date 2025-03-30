@@ -1,9 +1,12 @@
 from __future__ import annotations
-import pathlib
-from typing import Any, Optional
+
 import json
+import pathlib
+from typing import Any
+
 import regex as re
 import tqdm.auto as tqdm
+
 from fern import utils
 
 TokenPair = tuple[int, int]
@@ -21,8 +24,8 @@ class BytePairEncoding:
 
     vocab_size: int
     special_tokens: list[str]
-    _pair_to_index: Optional[PairToIndex] = None
-    _index_to_pair: Optional[IndexToPair] = None
+    _pair_to_index: PairToIndex | None = None
+    _index_to_pair: IndexToPair | None = None
     _special_token_to_index: SpecialTokenToIndex = dict()
     _index_to_special_token: IndexToSpecialToken = dict()
 
@@ -38,9 +41,11 @@ class BytePairEncoding:
 
     @pair_to_index.setter
     def pair_to_index(self, pti: PairToIndex):
-        assert (
-            self.vocab_size - raw_bytes - len(self.special_token_to_index) == len(pti)
-        ), f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(pti)}"
+        assert self.vocab_size - raw_bytes - len(self.special_token_to_index) == len(
+            pti
+        ), (
+            f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(pti)}"
+        )
         self._pair_to_index = pti
         self._index_to_pair = utils.invert_dict(pti)
 
@@ -54,9 +59,11 @@ class BytePairEncoding:
 
     @index_to_pair.setter
     def index_to_pair(self, itp: IndexToPair):
-        assert (
-            self.vocab_size - raw_bytes - len(self.special_token_to_index) == len(itp)
-        ), f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(itp)}"
+        assert self.vocab_size - raw_bytes - len(self.special_token_to_index) == len(
+            itp
+        ), (
+            f"Dictionary expected to contain {self.vocab_size - raw_bytes}, got {len(itp)}"
+        )
         self._index_to_pair = itp
         self._pair_to_index = utils.invert_dict(itp)
 
@@ -90,11 +97,11 @@ class BytePairEncoding:
         self,
         vocab_size: int,
         special_tokens: list[str] = [],
-        split_pattern: Optional[str] = None,
+        split_pattern: str | None = None,
     ):
-        assert vocab_size > raw_bytes + len(
-            special_tokens
-        ), f"Vocab size must be at least {raw_bytes + len(special_tokens)}"
+        assert vocab_size > raw_bytes + len(special_tokens), (
+            f"Vocab size must be at least {raw_bytes + len(special_tokens)}"
+        )
         self.vocab_size = vocab_size
         if split_pattern is not None:
             self._split_pattern = split_pattern
@@ -108,7 +115,7 @@ class BytePairEncoding:
     def from_pretrained(
         pair_to_index: PairToIndex,
         special_token_to_index: SpecialTokenToIndex = dict(),
-        split_pattern: Optional[str] = None,
+        split_pattern: str | None = None,
     ) -> BytePairEncoding:
         bpe = BytePairEncoding(
             raw_bytes + len(pair_to_index) + len(special_token_to_index),
@@ -124,7 +131,7 @@ class BytePairEncoding:
 
     # TODO: Optimize. Keep track of positions of pairs. When merging - simultaniously count new pairs, while subtracting from the previous ones.
     def train(
-        self, text: str, save_path: Optional[str] = None, show_progress: bool = False
+        self, text: str, save_path: str | None = None, show_progress: bool = False
     ) -> PairToIndex:
         self._pair_to_index = dict()
 

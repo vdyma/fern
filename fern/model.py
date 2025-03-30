@@ -1,23 +1,23 @@
-import typing as t
+from collections.abc import Callable, Generator
 
 import torch
-import torchtune  # type: ignore
 
 from fern.config import FernConfig
+from fern.rope import RotaryPositionalEmbeddings
 
 
 class SelfAttentionHead(torch.nn.Module):
     def __init__(self, config: FernConfig):
-        super().__init__()  # type: ignore
+        super().__init__()
         self.config = config
         self.key = torch.nn.Linear(
-            self.config.d_model, self.config.head_size, bias=False
+            self.config.token_emb_dim, self.config.head_size, bias=False
         )
         self.query = torch.nn.Linear(
-            self.config.d_model, self.config.head_size, bias=False
+            self.config.token_emb_dim, self.config.head_size, bias=False
         )
         self.value = torch.nn.Linear(
-            self.config.d_model, self.config.head_size, bias=False
+            self.config.token_emb_dim, self.config.head_size, bias=False
         )
         self.register_buffer(
             "tril",
@@ -45,13 +45,13 @@ class SelfAttentionHead(torch.nn.Module):
 
 class MultiHeadAttention(torch.nn.Module):
     def __init__(self, config: FernConfig):
-        super().__init__()  # type: ignore
+        super().__init__()
         self.config = config
         self.heads = torch.nn.ModuleList(
             [SelfAttentionHead(self.config) for _ in range(self.config.n_heads)]
         )
         self.proj = torch.nn.Linear(
-            self.config.d_model, self.config.d_model, bias=False
+            self.config.token_emb_dim, self.config.token_emb_dim, bias=False
         )
         self.dropout = torch.nn.Dropout(self.config.dropout)
 
@@ -62,21 +62,21 @@ class MultiHeadAttention(torch.nn.Module):
 
 class FusedMultiHeadAttention(torch.nn.Module):
     def __init__(self, config: FernConfig):
-        super().__init__()  # type: ignore
+        super().__init__()
         self.config = config
         self.attn = torch.nn.Linear(
-            self.config.d_model, self.config.d_model * 3, bias=False
+            self.config.token_emb_dim, self.config.token_emb_dim * 3, bias=False
         )
         self.proj = torch.nn.Linear(
-            self.config.d_model, self.config.d_model, bias=False
+            self.config.token_emb_dim, self.config.token_emb_dim, bias=False
         )
         self.dropout = torch.nn.Dropout(self.config.dropout)
 
-        self.q_rope = torchtune.modules.RotaryPositionalEmbeddings(
-            self.config.d_model // self.config.n_heads, self.config.block_size
+        self.q_rope = RotaryPositionalEmbeddings(
+            self.config.token_emb_dim // self.config.n_heads, self.config.block_size
         )
-        self.k_rope = torchtune.modules.RotaryPositionalEmbeddings(
-            self.config.d_model // self.config.n_heads, self.config.block_size
+        self.k_rope = RotaryPositionalEmbeddings(
+            self.config.token_emb_dim // self.config.n_heads, self.config.block_size
         )
 
     def __reshape_view(self, w: torch.Tensor, B: int, T: int, C: int) -> torch.Tensor:
@@ -88,7 +88,7 @@ class FusedMultiHeadAttention(torch.nn.Module):
         q, k, v = tuple(
             map(
                 lambda w: self.__reshape_view(w, B, T, C),  # .transpose(1, 2),
-                self.attn(x).split(self.config.d_model, dim=2),
+                self.attn(x).split(self.config.token_emb_dim, dim=2),
             )
         )  # (B, T, n_head, head_dim)
 
@@ -111,7 +111,7 @@ class FusedMultiHeadAttention(torch.nn.Module):
 
 class SwiGLU(torch.nn.Module):
     def __init__(self, n_embd: int):
-        super().__init__()  # type: ignore
+        super().__init__()
         self.w = torch.nn.Linear(n_embd, n_embd, bias=False)
         self.silu = torch.nn.SiLU()
 
@@ -122,17 +122,17 @@ class SwiGLU(torch.nn.Module):
 
 class FeedForward(torch.nn.Module):
     def __init__(self, config: FernConfig):
-        super().__init__()  # type: ignore
+        super().__init__()
         self.config = config
         self.w1 = torch.nn.Linear(
-            self.config.d_model, self.config.d_model * 4, bias=False
+            self.config.token_emb_dim, self.config.token_emb_dim * 4, bias=False
         )
         self.swish = torch.nn.SiLU()
         self.w2 = torch.nn.Linear(
-            self.config.d_model, self.config.d_model * 4, bias=False
+            self.config.token_emb_dim, self.config.token_emb_dim * 4, bias=False
         )
         self.w3 = torch.nn.Linear(
-            self.config.d_model * 4, self.config.d_model, bias=False
+            self.config.token_emb_dim * 4, self.config.token_emb_dim, bias=False
         )
         self.drop = torch.nn.Dropout(self.config.dropout)
 
@@ -143,12 +143,12 @@ class FeedForward(torch.nn.Module):
 
 class TransformerBlock(torch.nn.Module):
     def __init__(self, config: FernConfig):
-        super().__init__()  # type: ignore
+        super().__init__()
         self.config = config
         self.sa = FusedMultiHeadAttention(self.config)
         self.ff = FeedForward(self.config)
-        self.rmsn1 = torchtune.modules.RMSNorm(self.config.d_model)
-        self.rmsn2 = torchtune.modules.RMSNorm(self.config.d_model)
+        self.rmsn1 = torch.nn.RMSNorm(self.config.token_emb_dim)
+        self.rmsn2 = torch.nn.RMSNorm(self.config.token_emb_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.sa(self.rmsn1(x))
@@ -160,25 +160,23 @@ class Transformer(torch.nn.Module):
     config = FernConfig
 
     def __init__(self, config: FernConfig):
-        super().__init__()  # type: ignore
+        super().__init__()
         self.config = config
         self.token_embedding_table = torch.nn.Embedding(
-            self.config.vocab_size, self.config.d_model
+            self.config.vocab_size, self.config.token_emb_dim
         )
         self.token_embedding_table.weight.data *= 0.1
         self.blocks = torch.nn.Sequential(
             *[TransformerBlock(self.config) for _ in range(self.config.n_layers)]
         )
-        self.rmsn = torchtune.modules.RMSNorm(self.config.d_model)
-        self.lm_head = torch.nn.Linear(
-            self.config.d_model, self.config.vocab_size, bias=False
-        )
+        self.rmsn = torch.nn.RMSNorm(self.config.token_emb_dim)
+        # self.lm_head = torch.nn.Linear(self.config.token_emb_dim, self.config.vocab_size, bias=False)
 
     def forward(
         self,
         idx: torch.Tensor,
-        targets: t.Optional[torch.Tensor] = None,
-    ) -> tuple[torch.Tensor, t.Optional[torch.Tensor]]:
+        targets: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         tok_emb: torch.Tensor = self.token_embedding_table(idx)  # (B, T, C)
         x = tok_emb
         x: torch.Tensor = self.blocks(x)
@@ -198,15 +196,15 @@ class Transformer(torch.nn.Module):
     def generate(
         self,
         indexes: torch.Tensor,
-        max_new_tokens: t.Optional[int] = None,
-        stop_token: t.Optional[int] = None,
-    ) -> t.Generator[torch.Tensor, None, None]:
-        assert (
-            max_new_tokens is not None or stop_token is not None
-        ), "Either `max_new_tokens` or `stop_token` should be set"
+        max_new_tokens: int | None = None,
+        stop_token: int | None = None,
+    ) -> Generator[torch.Tensor, None, None]:
+        assert max_new_tokens is not None or stop_token is not None, (
+            "Either `max_new_tokens` or `stop_token` should be set"
+        )
         i = 0
         idx_next = torch.tensor([[-1]])
-        while_conditions: list[t.Callable[[None], bool]] = []
+        while_conditions: list[Callable[[None], bool]] = []
         if max_new_tokens is not None:
             while_conditions.append(lambda _: i < max_new_tokens)
         if stop_token is not None:
@@ -225,10 +223,10 @@ class Transformer(torch.nn.Module):
     def get_generation(
         self,
         indexes: torch.Tensor,
-        max_new_tokens: t.Optional[int] = None,
-        stop_token: t.Optional[int] = None,
+        max_new_tokens: int | None = None,
+        stop_token: int | None = None,
     ) -> torch.Tensor:
-        result: list[int] = indexes[0].tolist()  # type: ignore
+        result: list[int] = indexes[0].tolist()
         for tok in self.generate(indexes, max_new_tokens, stop_token):
             result.append(int(tok.item()))
         return torch.tensor(result)
