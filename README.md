@@ -4,7 +4,7 @@ _In the realm where technology and nature intertwine, Fern emerges as a beacon o
 
 ## What is Fern?
 
-Fern is an ongoing effort to create a model similar to [Chameleon](https://arxiv.org/abs/2405.09818), but which would cover all modalities. Currently it resembles [Llama 2](https://arxiv.org/abs/2307.09288) in terms of architecture.
+Fern is an ongoing effort to create a model similar to [Chameleon](https://arxiv.org/abs/2405.09818), [MEGABYTE](https://arxiv.org/abs/2305.07185), [Byte Latent Transformer](https://arxiv.org/pdf/2412.09871) and [MobileLLM](https://arxiv.org/abs/2402.14905). Currently it resembles [Llama 2](https://arxiv.org/abs/2307.09288) in terms of architecture.
 
 ## Overview
 
@@ -13,10 +13,10 @@ Fern is an ongoing effort to create a model similar to [Chameleon](https://arxiv
 The following system components are implemented:
 
 - [Transformer](https://arxiv.org/abs/1706.03762) architecture
-    - [RMSNorm](https://arxiv.org/abs/1910.07467) normalization
-    - [RoPE](https://arxiv.org/abs/2104.09864) positional embeddings
-    - [SwiGLU](https://arxiv.org/abs/2002.05202) activation function
-    - [Embedding sharing](https://arxiv.org/abs/2205.01068)
+  - [RMSNorm](https://arxiv.org/abs/1910.07467) normalization
+  - [RoPE](https://arxiv.org/abs/2104.09864) positional embeddings
+  - [SwiGLU](https://arxiv.org/abs/2002.05202) activation function
+  - [Embedding sharing](https://arxiv.org/abs/2205.01068)
 - [Byte-Pair Encoding](https://arxiv.org/abs/1508.07909) tokenizer
 
 ### Data and tokenization
@@ -33,36 +33,42 @@ The model `dim` is 128, it has 32 layers with 8 heads each. Model is trained wit
 
 ## Install and run
 
-1. Install [miniforge3](https://github.com/conda-forge/miniforge?tab=readme-ov-file#install).
+1. Clone this repository. To clone the repository using [git](https://git-scm.com/), run:
 
-2. Clone this repository. To clone the repository using [git](https://git-scm.com/), run:
+    ```bash
+    git clone https://github.com/vdyma/fern
+    ```
 
-```bash
-git clone https://github.com/vdyma/fern
-```
+2. Install [uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 3. Open repository root directory as a working directory in your shell and create a new conda environment:
 
-```bash
-conda install --file environment.yaml
-```
+    ```bash
+    uv python install
+    uv sync
+    ```
 
-4. Activate conda environment:
+You are now ready to use the model.
 
-```bash
-conda activate fern
-```
-
-You are now ready to use the model. 
-
-(Optional) In order to run Jupyter Notebooks, you need to additionally install [Jupyter Lab](https://jupyter.org/install) and `ipywidgets`:
+(Optional) In order to run Jupyter Notebooks, you need to additionally install [Jupyter Lab](https://jupyter.org/install) and dev dependencies:
 
 ```bash
-conda install jupyterlab ipywidgets
+uv sync --group dev
 ```
 
 You can then run jupyter as follows:
 
 ```bash
 jupyter lab
+```
+
+## Contributing
+
+Feel free to open an issue if you encounter a problem or have a suggestion. Create a PR if you'd like to contribute a fix or a feature.
+
+Before commiting, please use [Ruff](https://docs.astral.sh/ruff/) and [isort](https://pycqa.github.io/isort/index.html).
+
+```bash
+uvx ruff format
+uvx isort .
 ```
